@@ -8,6 +8,7 @@ from config import (
     AMO_FIELD_CHECKBOX_STATUS,
     AMO_STATUS_TARGET,
     AMO_PURCHASE_PRICE_FIELD_ID,
+    AMO_FIELD_TTN,
 )
 from amocrm_client import (
     AmoApiError,
@@ -93,6 +94,7 @@ def load_lead_with_details(lead_id: int) -> Dict[str, Any]:
     checkbox_status_value = None
     if AMO_FIELD_CHECKBOX_STATUS:
         checkbox_status_value = _find_cf_value_by_id(lead, AMO_FIELD_CHECKBOX_STATUS)
+    ttn_value = _find_cf_value_by_id(lead, AMO_FIELD_TTN)
     discount = Decimal("0")
     if discount_raw not in (None, ""):
         try:
@@ -121,6 +123,7 @@ def load_lead_with_details(lead_id: int) -> Dict[str, Any]:
         "checkbox_status": checkbox_status_value,
         "email": email,
         "purchases": purchases,
+        "ttn": ttn_value,
     }
 
 
