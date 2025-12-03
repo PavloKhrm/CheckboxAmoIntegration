@@ -25,6 +25,10 @@ AMO_FIELD_DISCOUNT = int(os.getenv("AMO_FIELD_DISCOUNT", "825281"))
 AMO_FIELD_CHECKBOX_STATUS = int(os.getenv("AMO_FIELD_CHECKBOX_STATUS", "0"))
 AMO_STATUS_TARGET = os.getenv("AMO_STATUS_TARGET", "Контроль оплаты")
 AMO_PURCHASE_PRICE_FIELD_ID = int(os.getenv("AMO_PURCHASE_PRICE_FIELD_ID", "0"))
+
+AMO_PURCHASE_ITEMS_FIELD_ID = int(os.getenv("AMO_PURCHASE_ITEMS_FIELD_ID", "0"))
+AMO_PURCHASE_TOTAL_FIELD_ID = int(os.getenv("AMO_PURCHASE_TOTAL_FIELD_ID", "0"))
+
 AMO_FIELD_TTN = int(os.getenv("AMO_FIELD_TTN", "603103"))
 
 CHECKBOX_API_BASE = os.getenv("CHECKBOX_API_BASE", "https://api.checkbox.in.ua/api/v1").rstrip("/")

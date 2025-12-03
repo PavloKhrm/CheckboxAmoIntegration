@@ -9,6 +9,8 @@ from config import (
     AMO_STATUS_TARGET,
     AMO_PURCHASE_PRICE_FIELD_ID,
     AMO_FIELD_TTN,
+    AMO_PURCHASE_ITEMS_FIELD_ID,
+    AMO_PURCHASE_TOTAL_FIELD_ID,
 )
 from amocrm_client import (
     AmoApiError,
@@ -27,6 +29,13 @@ def _find_cf_value_by_id(entity: Dict[str, Any], field_id: int) -> Optional[Any]
             values = cf.get("values") or []
             if values:
                 return values[0].get("value")
+    return None
+
+
+def _find_cf_block_by_id(entity: Dict[str, Any], field_id: int) -> Optional[Dict[str, Any]]:
+    for cf in entity.get("custom_fields_values") or []:
+        if cf.get("field_id") == field_id:
+            return cf
     return None
 
 
@@ -64,7 +73,7 @@ def _extract_email_from_lead(lead: Dict[str, Any]) -> Optional[str]:
     try:
         contact = get_contact(contact_id)
     except AmoApiError as e:
-        logger.error("amo.contact.error", extra={"contact_id": contact_id, "error": str(e)})
+        logger.error(f"amo.contact.error contact_id={contact_id} error={e}")
         return None
     return _extract_email_from_contact(contact)
 
@@ -87,7 +96,41 @@ def _extract_price_from_purchase(raw_element: Dict[str, Any]) -> Decimal:
     return Decimal("0")
 
 
+def _extract_items_from_purchase_element(raw_element: Dict[str, Any]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    if not AMO_PURCHASE_ITEMS_FIELD_ID:
+        return items
+    block = _find_cf_block_by_id(raw_element, AMO_PURCHASE_ITEMS_FIELD_ID)
+    if not block:
+        return items
+    values = block.get("values") or []
+    for idx, v in enumerate(values):
+        obj = v.get("value") or {}
+        name = obj.get("description") or f"Товар {idx + 1}"
+        unit_price = obj.get("unit_price")
+        quantity = obj.get("quantity") or 1
+        try:
+            price_dec = Decimal(str(unit_price).replace(",", "."))
+        except Exception:
+            price_dec = Decimal("0")
+        try:
+            qty_dec = Decimal(str(quantity))
+        except Exception:
+            qty_dec = Decimal("1")
+        if price_dec <= 0 or qty_dec <= 0:
+            continue
+        items.append(
+            {
+                "name": name,
+                "quantity": qty_dec,
+                "price": price_dec,
+            }
+        )
+    return items
+
+
 def load_lead_with_details(lead_id: int) -> Dict[str, Any]:
+    logger.info(f"amocrm.load_lead start lead_id={lead_id}")
     lead = get_lead(lead_id)
     status_value = _find_cf_value_by_id(lead, AMO_FIELD_STATUS)
     discount_raw = _find_cf_value_by_id(lead, AMO_FIELD_DISCOUNT)
@@ -106,15 +149,29 @@ def load_lead_with_details(lead_id: int) -> Dict[str, Any]:
     purchases: List[Dict[str, Any]] = []
     for p in purchases_raw:
         raw_element = p.get("raw_element") or {}
-        price = _extract_price_from_purchase(raw_element)
-        qty = p.get("quantity") or 1
-        purchases.append(
-            {
-                "name": p.get("name") or "Товар",
-                "quantity": qty,
-                "price": price,
-            }
-        )
+        items = _extract_items_from_purchase_element(raw_element)
+        if items:
+            purchases.extend(items)
+        else:
+            price = _extract_price_from_purchase(raw_element)
+            qty = p.get("quantity") or 1
+            try:
+                qty_dec = Decimal(str(qty))
+            except Exception:
+                qty_dec = Decimal("1")
+            purchases.append(
+                {
+                    "name": p.get("name") or "Товар",
+                    "quantity": qty_dec,
+                    "price": price,
+                }
+            )
+    logger.info(
+        "amocrm.load_lead done "
+        f"lead_id={lead_id} status_value={status_value} discount={discount} "
+        f"checkbox_status={checkbox_status_value} email={email} ttn={ttn_value} "
+        f"purchases_elements={len(purchases_raw)} purchases_flat={len(purchases)}"
+    )
     return {
         "id": lead_id,
         "lead": lead,
@@ -129,6 +186,7 @@ def load_lead_with_details(lead_id: int) -> Dict[str, Any]:
 
 def is_target_status(lead_data: Dict[str, Any]) -> bool:
     value = lead_data.get("status_value")
+    logger.info(f"amocrm.status.check status_value={value} target={AMO_STATUS_TARGET}")
     if value is None:
         return False
     return str(value).strip() == AMO_STATUS_TARGET
@@ -141,16 +199,15 @@ def is_already_processed(lead_data: Dict[str, Any]) -> bool:
     if not isinstance(value, str):
         value = str(value)
     value_lower = value.lower()
+    logger.info(f"amocrm.checkbox_status.check value={value_lower}")
     return value_lower.startswith("ok:") or value_lower.startswith("error:")
 
 
 def set_checkbox_status(lead_id: int, text: str) -> None:
     if not AMO_FIELD_CHECKBOX_STATUS:
         return
+    logger.info(f"amocrm.checkbox_status.set lead_id={lead_id} text={text}")
     try:
         update_lead_custom_field(lead_id, AMO_FIELD_CHECKBOX_STATUS, text)
     except AmoApiError as e:
-        logger.error(
-            "amo.checkbox_status.error",
-            extra={"lead_id": lead_id, "error": str(e), "text": text},
-        )
+        logger.error(f"amocrm.checkbox_status.error lead_id={lead_id} error={e} text={text}")
