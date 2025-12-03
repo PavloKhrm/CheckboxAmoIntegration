@@ -45,26 +45,28 @@ def _http(
         headers["Authorization"] = f"Bearer {token}"
     if license_key:
         headers["X-License-Key"] = license_key
-    logger.debug(
-        "checkbox.http",
-        extra={"method": method, "url": url},
-    )
+    logger.debug("checkbox.http", extra={"method": method, "url": url})
     resp = requests.request(method, url, headers=headers, json=json, timeout=5)
     try:
         data = resp.json()
     except Exception:
         data = resp.text
     if resp.status_code >= 400:
-        message = ""
+        msg_text = ""
         if isinstance(data, dict):
-            message = str(data.get("message") or data)
+            msg_text = str(data.get("message") or data)
         else:
-            message = str(data)
+            msg_text = str(data)
         logger.error(
             "checkbox.error",
-            extra={"status": resp.status_code, "message": message, "preview": str(data)[:500]},
+            extra={
+                "status_code": resp.status_code,
+                "api_message": msg_text,
+                "api_preview": str(data)[:500],
+                "url": url,
+            },
         )
-        raise CheckboxApiError(resp.status_code, message, data)
+        raise CheckboxApiError(resp.status_code, msg_text, data)
     return data
 
 
@@ -106,9 +108,13 @@ def ensure_shift_for_profile(token: str, profile_id: str) -> None:
         open_shift_for_profile(token, profile_id)
         return
     except CheckboxApiError as e:
-        msg = str(e)
-        msg_lower = msg.lower()
-        if "already" in msg_lower or "вже працює" in msg_lower or "зайнята іншим касиром" in msg_lower:
+        msg_lower = str(e).lower()
+        if (
+            "вже працює" in msg_lower
+            or "already" in msg_lower
+            or "відкрито зміну" in msg_lower
+            or "зайнята іншим касиром" in msg_lower
+        ):
             logger.debug("checkbox.ensure_shift.already_open", extra={"profile_id": profile_id})
             return
         raise
@@ -142,7 +148,7 @@ def create_sell_receipt_for_profile(
                 "type": "DISCOUNT",
                 "mode": "VALUE",
                 "value": int(discount_minor),
-                "name": "Знижка",
+                "name": "Знижка з AmoCRM",
             }
         ]
     if CHECKBOX_SEND_EMAIL and email:
