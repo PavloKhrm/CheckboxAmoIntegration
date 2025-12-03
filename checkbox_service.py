@@ -8,6 +8,7 @@ from checkbox_api import (
     ensure_shift_for_profile,
     create_sell_receipt_for_profile,
 )
+from time_window import is_receipt_allowed_now
 
 logger = logging.getLogger("checkbox_service")
 
@@ -61,12 +62,14 @@ def build_goods_and_sum(purchases: List[Dict[str, Any]]) -> Tuple[List[Dict[str,
 
 
 def create_receipt_for_lead_data(lead_data: Dict[str, Any], profile_id: str) -> Dict[str, Any]:
+    if not is_receipt_allowed_now():
+        return {"receipt_id": "", "receipt_number": "", "error": "maintenance_window"}
     purchases = lead_data.get("purchases") or []
     email = lead_data.get("email")
     discount = lead_data.get("discount") or Decimal("0")
     goods, total_minor = build_goods_and_sum(purchases)
     if not goods or total_minor <= 0:
-        return {"receipt_id": "", "receipt_number": "", "error": "no goods or zero total"}
+        return {"receipt_id": "", "receipt_number": "", "error": "no_goods_or_zero_total"}
     discount_minor = to_minor(discount)
     if discount_minor > total_minor:
         discount_minor = total_minor

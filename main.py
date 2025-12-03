@@ -11,6 +11,7 @@ from amocrm_service import (
     set_checkbox_status,
 )
 from checkbox_service import create_receipt_for_lead_data
+from nova_poshta_service import detect_profile_for_ttn
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -76,41 +77,68 @@ def amocrm_webhook() -> Any:
         if form:
             lead_id = _extract_lead_id_from_form(form)
     if lead_id is None:
+        logger.error("webhook.lead_id_not_found")
         return jsonify({"error": "lead_id not found"}), 400
-    logger.info("webhook.received", extra={"lead_id": lead_id})
+    logger.info(f"webhook.received lead_id={lead_id}")
     try:
         lead_data = load_lead_with_details(lead_id)
     except Exception as e:
-        logger.exception("lead.load.error")
+        logger.exception(f"lead.load.error lead_id={lead_id} error={e}")
         return jsonify({"error": str(e)}), 500
     if is_already_processed(lead_data):
-        logger.info("lead.already_processed", extra={"lead_id": lead_id})
+        logger.info(f"lead.already_processed lead_id={lead_id}")
         return jsonify({"status": "already_processed"}), 200
     if not is_target_status(lead_data):
         logger.info(
-            "lead.status.skip",
-            extra={"lead_id": lead_id, "status_value": lead_data.get("status_value")},
+            f"lead.status.skip lead_id={lead_id} status_value={lead_data.get('status_value')}"
         )
         return jsonify({"status": "skipped_by_status"}), 200
+    ttn = lead_data.get("ttn") or ""
+    if not ttn:
+        msg = "no TTN in deal"
+        logger.warning(f"lead.no_ttn lead_id={lead_id}")
+        set_checkbox_status(lead_id, f"ERROR: {msg}")
+        return jsonify({"error": msg}), 400
+    profile_id = detect_profile_for_ttn(str(ttn))
+    if not profile_id:
+        msg = "TTN does not belong to known Nova Poshta accounts"
+        logger.warning(f"lead.ttn_profile_not_found lead_id={lead_id} ttn={ttn}")
+        set_checkbox_status(lead_id, f"ERROR: {msg}")
+        return jsonify({"error": msg}), 400
     try:
-        result = create_receipt_for_lead_data(lead_data)
+        result = create_receipt_for_lead_data(lead_data, profile_id)
     except Exception as e:
         msg = str(e)
-        logger.exception("checkbox.create.error")
+        logger.exception(f"checkbox.create.error lead_id={lead_id} profile_id={profile_id} error={msg}")
         set_checkbox_status(lead_id, f"ERROR: {msg}")
         return jsonify({"error": msg}), 500
     receipt_id = result.get("receipt_id") or ""
     receipt_number = result.get("receipt_number") or ""
     error = result.get("error")
     if error:
+        logger.error(
+            f"checkbox.create.result_error lead_id={lead_id} profile_id={profile_id} error={error}"
+        )
         set_checkbox_status(lead_id, f"ERROR: {error}")
-        return jsonify({"error": error, "receipt_id": receipt_id, "receipt_number": receipt_number}), 500
+        return jsonify(
+            {
+                "error": error,
+                "receipt_id": receipt_id,
+                "receipt_number": receipt_number,
+                "profile_id": profile_id,
+            }
+        ), 500
     text = f"OK: {receipt_number or '—'} (id: {receipt_id or '—'})"
     set_checkbox_status(lead_id, text)
+    logger.info(
+        f"checkbox.create.ok lead_id={lead_id} profile_id={profile_id} "
+        f"receipt_id={receipt_id} receipt_number={receipt_number}"
+    )
     return jsonify(
         {
             "status": "ok",
             "lead_id": lead_id,
+            "profile_id": profile_id,
             "receipt_id": receipt_id,
             "receipt_number": receipt_number,
         }

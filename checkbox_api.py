@@ -95,6 +95,12 @@ def open_shift_for_profile(token: str, profile_id: str) -> Any:
     return data
 
 
+def close_shift_for_profile(token: str, profile_id: str) -> Any:
+    profile = get_profile(profile_id)
+    data = _http("POST", "/shifts/close", token=token, json={}, license_key=profile.license_key)
+    return data
+
+
 def ensure_shift_for_profile(token: str, profile_id: str) -> None:
     try:
         open_shift_for_profile(token, profile_id)
