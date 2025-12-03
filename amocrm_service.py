@@ -243,9 +243,11 @@ def is_already_processed(lead_data: Dict[str, Any]) -> bool:
     value = lead_data.get("checkbox_status") or ""
     if not isinstance(value, str):
         value = str(value)
-    value_lower = value.lower()
+    value_lower = value.lower().strip()
     logger.info(f"amocrm.checkbox_status.check value={value_lower}")
-    return value_lower.startswith("ok:") or value_lower.startswith("error:")
+    if value_lower.startswith("ok:"):
+        return True
+    return False
 
 
 def set_checkbox_status(lead_id: int, text: str) -> None:
