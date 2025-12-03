@@ -12,6 +12,7 @@ from amocrm_service import (
 )
 from checkbox_service import create_receipt_for_lead_data
 from nova_poshta_service import detect_profile_for_ttn
+from telegram_notify import send_telegram
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -78,13 +79,16 @@ def amocrm_webhook() -> Any:
             lead_id = _extract_lead_id_from_form(form)
     if lead_id is None:
         logger.error("webhook.lead_id_not_found")
+        send_telegram("❌ Вебхук AmoCRM: не удалось получить ID сделки")
         return jsonify({"error": "lead_id not found"}), 400
     logger.info(f"webhook.received lead_id={lead_id}")
     try:
         lead_data = load_lead_with_details(lead_id)
     except Exception as e:
-        logger.exception(f"lead.load.error lead_id={lead_id} error={e}")
-        return jsonify({"error": str(e)}), 500
+        msg = str(e)
+        logger.exception(f"lead.load.error lead_id={lead_id} error={msg}")
+        send_telegram(f"❌ Сделка <b>{lead_id}</b>: ошибка загрузки сделки\n<code>{msg}</code>")
+        return jsonify({"error": msg}), 500
     if is_already_processed(lead_data):
         logger.info(f"lead.already_processed lead_id={lead_id}")
         return jsonify({"status": "already_processed"}), 200
@@ -98,12 +102,16 @@ def amocrm_webhook() -> Any:
         msg = "no TTN in deal"
         logger.warning(f"lead.no_ttn lead_id={lead_id}")
         set_checkbox_status(lead_id, f"ERROR: {msg}")
+        send_telegram(f"❌ Сделка <b>{lead_id}</b>: нет ТТН в сделке")
         return jsonify({"error": msg}), 400
     profile_id = detect_profile_for_ttn(str(ttn))
     if not profile_id:
         msg = "TTN does not belong to known Nova Poshta accounts"
         logger.warning(f"lead.ttn_profile_not_found lead_id={lead_id} ttn={ttn}")
         set_checkbox_status(lead_id, f"ERROR: {msg}")
+        send_telegram(
+            f"❌ Сделка <b>{lead_id}</b>: ТТН <code>{ttn}</code> не относится ни к одному аккаунту НП"
+        )
         return jsonify({"error": msg}), 400
     try:
         result = create_receipt_for_lead_data(lead_data, profile_id)
@@ -111,6 +119,9 @@ def amocrm_webhook() -> Any:
         msg = str(e)
         logger.exception(f"checkbox.create.error lead_id={lead_id} profile_id={profile_id} error={msg}")
         set_checkbox_status(lead_id, f"ERROR: {msg}")
+        send_telegram(
+            f"❌ Сделка <b>{lead_id}</b>: ошибка при создании чека (профиль {profile_id})\n<code>{msg}</code>"
+        )
         return jsonify({"error": msg}), 500
     receipt_id = result.get("receipt_id") or ""
     receipt_number = result.get("receipt_number") or ""
@@ -120,6 +131,9 @@ def amocrm_webhook() -> Any:
             f"checkbox.create.result_error lead_id={lead_id} profile_id={profile_id} error={error}"
         )
         set_checkbox_status(lead_id, f"ERROR: {error}")
+        send_telegram(
+            f"❌ Сделка <b>{lead_id}</b>: ошибка создания чека (профиль {profile_id})\n<code>{error}</code>"
+        )
         return jsonify(
             {
                 "error": error,
@@ -133,6 +147,10 @@ def amocrm_webhook() -> Any:
     logger.info(
         f"checkbox.create.ok lead_id={lead_id} profile_id={profile_id} "
         f"receipt_id={receipt_id} receipt_number={receipt_number}"
+    )
+    send_telegram(
+        f"✅ Сделка <b>{lead_id}</b>: чек выдан успешно (профиль {profile_id})\n"
+        f"ID: <code>{receipt_id or '—'}</code>\nНомер: <code>{receipt_number or '—'}</code>"
     )
     return jsonify(
         {
