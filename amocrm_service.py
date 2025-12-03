@@ -2,13 +2,17 @@ import logging
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+import requests
+
 from config import (
+    AMO_BASE_URL,
+    AMO_ACCESS_TOKEN,
     AMO_FIELD_DISCOUNT,
     AMO_FIELD_STATUS,
     AMO_FIELD_CHECKBOX_STATUS,
     AMO_STATUS_TARGET,
-    AMO_PURCHASE_PRICE_FIELD_ID,
     AMO_FIELD_TTN,
+    AMO_PURCHASES_CATALOG_ID,
     AMO_PURCHASE_ITEMS_FIELD_ID,
     AMO_PURCHASE_TOTAL_FIELD_ID,
 )
@@ -16,34 +20,22 @@ from amocrm_client import (
     AmoApiError,
     get_contact,
     get_lead,
-    get_purchases_for_lead,
     update_lead_custom_field,
 )
 
 logger = logging.getLogger("amocrm_service")
 
 
+def _amo_headers() -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {AMO_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+
 def _find_cf_value_by_id(entity: Dict[str, Any], field_id: int) -> Optional[Any]:
     for cf in entity.get("custom_fields_values") or []:
         if cf.get("field_id") == field_id:
-            values = cf.get("values") or []
-            if values:
-                return values[0].get("value")
-    return None
-
-
-def _find_cf_block_by_id(entity: Dict[str, Any], field_id: int) -> Optional[Dict[str, Any]]:
-    for cf in entity.get("custom_fields_values") or []:
-        if cf.get("field_id") == field_id:
-            return cf
-    return None
-
-
-def _find_cf_value_by_code(entity: Dict[str, Any], code: str) -> Optional[Any]:
-    code_lower = code.lower()
-    for cf in entity.get("custom_fields_values") or []:
-        field_code = str(cf.get("field_code") or "").lower()
-        if field_code == code_lower:
             values = cf.get("values") or []
             if values:
                 return values[0].get("value")
@@ -78,32 +70,74 @@ def _extract_email_from_lead(lead: Dict[str, Any]) -> Optional[str]:
     return _extract_email_from_contact(contact)
 
 
-def _extract_price_from_purchase(raw_element: Dict[str, Any]) -> Decimal:
-    if AMO_PURCHASE_PRICE_FIELD_ID:
-        v = _find_cf_value_by_id(raw_element, AMO_PURCHASE_PRICE_FIELD_ID)
-        if v is not None:
-            try:
-                return Decimal(str(v).replace(",", "."))
-            except Exception:
-                return Decimal("0")
-    for code in ("PRICE", "price"):
-        v = _find_cf_value_by_code(raw_element, code)
-        if v is not None:
-            try:
-                return Decimal(str(v).replace(",", "."))
-            except Exception:
-                return Decimal("0")
-    return Decimal("0")
+def _fetch_purchase_element_ids_for_lead(lead_id: int) -> List[int]:
+    url = f"{AMO_BASE_URL}/api/v4/leads/{lead_id}/links"
+    logger.info(f"amo.purchases.links.get start lead_id={lead_id} url={url}")
+    resp = requests.get(url, headers=_amo_headers(), params={"limit": 250}, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    links = (data.get("_embedded") or {}).get("links") or []
+    ids: List[int] = []
+    for link in links:
+        if link.get("to_entity_type") != "catalog_elements":
+            continue
+        md = link.get("metadata") or {}
+        catalog_id = md.get("catalog_id")
+        try:
+            catalog_id_int = int(catalog_id)
+        except Exception:
+            catalog_id_int = 0
+        if catalog_id_int != AMO_PURCHASES_CATALOG_ID:
+            continue
+        eid = link.get("to_entity_id")
+        if not eid:
+            continue
+        try:
+            ids.append(int(eid))
+        except Exception:
+            continue
+    logger.info(f"amo.purchases.links.done lead_id={lead_id} ids={ids}")
+    return ids
 
 
-def _extract_items_from_purchase_element(raw_element: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _fetch_catalog_elements(ids: List[int]) -> List[Dict[str, Any]]:
+    if not ids:
+        return []
+    elements: List[Dict[str, Any]] = []
+    url = f"{AMO_BASE_URL}/api/v4/catalogs/{AMO_PURCHASES_CATALOG_ID}/elements"
+    chunk_size = 40
+    for i in range(0, len(ids), chunk_size):
+        chunk = ids[i : i + chunk_size]
+        params = [("filter[id][]", str(x)) for x in chunk]
+        logger.info(f"amo.purchases.elements.get chunk ids={chunk}")
+        resp = requests.get(url, headers=_amo_headers(), params=params, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        els = (data.get("_embedded") or {}).get("elements") or []
+        logger.info(f"amo.purchases.elements.chunk_done count={len(els)}")
+        elements.extend(els)
+    logger.info(f"amo.purchases.elements.total count={len(elements)}")
+    return elements
+
+
+def _extract_items_from_catalog_element(element: Dict[str, Any]) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
-    if not AMO_PURCHASE_ITEMS_FIELD_ID:
-        return items
-    block = _find_cf_block_by_id(raw_element, AMO_PURCHASE_ITEMS_FIELD_ID)
+    cfs = element.get("custom_fields_values") or []
+    block = None
+    for cf in cfs:
+        if cf.get("field_id") == AMO_PURCHASE_ITEMS_FIELD_ID:
+            block = cf
+            break
     if not block:
+        logger.info(
+            f"amo.purchases.element.no_items_field element_id={element.get('id')} "
+            f"items_field_id={AMO_PURCHASE_ITEMS_FIELD_ID}"
+        )
         return items
     values = block.get("values") or []
+    logger.info(
+        f"amo.purchases.element.items_field element_id={element.get('id')} raw_values_len={len(values)}"
+    )
     for idx, v in enumerate(values):
         obj = v.get("value") or {}
         name = obj.get("description") or f"Товар {idx + 1}"
@@ -117,6 +151,10 @@ def _extract_items_from_purchase_element(raw_element: Dict[str, Any]) -> List[Di
             qty_dec = Decimal(str(quantity))
         except Exception:
             qty_dec = Decimal("1")
+        logger.info(
+            f"amo.purchases.element.item_raw element_id={element.get('id')} idx={idx} "
+            f"name={name} unit_price={unit_price} quantity={quantity} price_dec={price_dec} qty_dec={qty_dec}"
+        )
         if price_dec <= 0 or qty_dec <= 0:
             continue
         items.append(
@@ -126,7 +164,34 @@ def _extract_items_from_purchase_element(raw_element: Dict[str, Any]) -> List[Di
                 "price": price_dec,
             }
         )
+    logger.info(
+        f"amo.purchases.element.items_parsed element_id={element.get('id')} count={len(items)}"
+    )
     return items
+
+
+def _fetch_purchases_for_lead(lead_id: int) -> List[Dict[str, Any]]:
+    try:
+        ids = _fetch_purchase_element_ids_for_lead(lead_id)
+    except Exception as e:
+        logger.error(f"amo.purchases.links.error lead_id={lead_id} error={e}")
+        return []
+    if not ids:
+        logger.info(f"amo.purchases.links.empty lead_id={lead_id}")
+        return []
+    try:
+        elements = _fetch_catalog_elements(ids)
+    except Exception as e:
+        logger.error(f"amo.purchases.elements.error lead_id={lead_id} error={e}")
+        return []
+    purchases: List[Dict[str, Any]] = []
+    for el in elements:
+        items = _extract_items_from_catalog_element(el)
+        purchases.extend(items)
+    logger.info(
+        f"amo.purchases.total_parsed lead_id={lead_id} elements={len(elements)} items={len(purchases)}"
+    )
+    return purchases
 
 
 def load_lead_with_details(lead_id: int) -> Dict[str, Any]:
@@ -145,32 +210,12 @@ def load_lead_with_details(lead_id: int) -> Dict[str, Any]:
         except Exception:
             discount = Decimal("0")
     email = _extract_email_from_lead(lead)
-    purchases_raw = get_purchases_for_lead(lead_id)
-    purchases: List[Dict[str, Any]] = []
-    for p in purchases_raw:
-        raw_element = p.get("raw_element") or {}
-        items = _extract_items_from_purchase_element(raw_element)
-        if items:
-            purchases.extend(items)
-        else:
-            price = _extract_price_from_purchase(raw_element)
-            qty = p.get("quantity") or 1
-            try:
-                qty_dec = Decimal(str(qty))
-            except Exception:
-                qty_dec = Decimal("1")
-            purchases.append(
-                {
-                    "name": p.get("name") or "Товар",
-                    "quantity": qty_dec,
-                    "price": price,
-                }
-            )
+    purchases = _fetch_purchases_for_lead(lead_id)
     logger.info(
         "amocrm.load_lead done "
         f"lead_id={lead_id} status_value={status_value} discount={discount} "
         f"checkbox_status={checkbox_status_value} email={email} ttn={ttn_value} "
-        f"purchases_elements={len(purchases_raw)} purchases_flat={len(purchases)}"
+        f"purchases_flat={len(purchases)}"
     )
     return {
         "id": lead_id,
