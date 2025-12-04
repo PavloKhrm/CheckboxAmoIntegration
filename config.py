@@ -60,6 +60,9 @@ if default_profile and "default" not in CHECKBOX_PROFILES:
 NP_API_KEY_1 = os.getenv("NP_API_KEY_1", "")
 NP_API_KEY_2 = os.getenv("NP_API_KEY_2", "")
 
+NP_SENDER_NAME_1 = (os.getenv("NP_SENDER_NAME_1") or "").strip()
+NP_SENDER_NAME_2 = (os.getenv("NP_SENDER_NAME_2") or "").strip()
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 PORT = int(os.getenv("PORT", "8080"))
 
