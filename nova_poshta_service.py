@@ -26,26 +26,39 @@ def _check_ttn_with_key(api_key: str, ttn: str) -> bool:
             ]
         },
     }
-    logger.debug("np.check_ttn.request", extra={"ttn": ttn})
+    logger.debug("np.check_ttn.request", extra={"ttn": ttn, "api_key": api_key[:4]})
     try:
         resp = requests.post(NP_API_URL, json=body, timeout=10)
     except requests.RequestException as e:
         logger.error("np.check_ttn.http_error", extra={"ttn": ttn, "error": str(e)})
         return False
+
+    logger.info(
+        "np.raw_response",
+        extra={
+            "ttn": ttn,
+            "status_code": resp.status_code,
+            "raw": resp.text[:2000]
+        }
+    )
+
     try:
         data = resp.json()
     except Exception:
         logger.error("np.check_ttn.bad_json", extra={"ttn": ttn, "status": resp.status_code})
         return False
+
     success = bool(data.get("success"))
     docs = data.get("data") or []
     errors = data.get("errors") or []
+
     if not success or errors or not docs:
         logger.info(
             "np.check_ttn.no_match",
             extra={"ttn": ttn, "success": success, "errors": errors, "docs_len": len(docs)},
         )
         return False
+
     logger.info("np.check_ttn.match", extra={"ttn": ttn, "docs_len": len(docs)})
     return True
 
