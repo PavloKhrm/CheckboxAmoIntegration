@@ -12,7 +12,7 @@ from amocrm_service import (
 )
 from checkbox_service import create_receipt_for_lead_data
 from nova_poshta_service import detect_profile_for_ttn
-from telegram_notify import send_telegram
+from telegram_notify import send_telegram, resolve_sender_name
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -119,8 +119,10 @@ def amocrm_webhook() -> Any:
         msg = str(e)
         logger.exception(f"checkbox.create.error lead_id={lead_id} profile_id={profile_id} error={msg}")
         set_checkbox_status(lead_id, f"ERROR: {msg}")
+        sender_name = resolve_sender_name(str(profile_id))
         send_telegram(
-            f"❌ Сделка <b>{lead_id}</b>: ошибка при создании чека (профиль {profile_id})\n<code>{msg}</code>"
+            f"❌ Сделка <b>{lead_id}</b>: ошибка при создании чека ({sender_name})\n<code>{msg}</code>",
+            str(profile_id),
         )
         return jsonify({"error": msg}), 500
     receipt_id = result.get("receipt_id") or ""
@@ -131,8 +133,10 @@ def amocrm_webhook() -> Any:
             f"checkbox.create.result_error lead_id={lead_id} profile_id={profile_id} error={error}"
         )
         set_checkbox_status(lead_id, f"ERROR: {error}")
+        sender_name = resolve_sender_name(str(profile_id))
         send_telegram(
-            f"❌ Сделка <b>{lead_id}</b>: ошибка создания чека (профиль {profile_id})\n<code>{error}</code>"
+            f"❌ Сделка <b>{lead_id}</b>: ошибка создания чека ({sender_name})\n<code>{error}</code>",
+            str(profile_id),
         )
         return jsonify(
             {
@@ -148,9 +152,11 @@ def amocrm_webhook() -> Any:
         f"checkbox.create.ok lead_id={lead_id} profile_id={profile_id} "
         f"receipt_id={receipt_id} receipt_number={receipt_number}"
     )
+    sender_name = resolve_sender_name(str(profile_id))
     send_telegram(
-        f"✅ Сделка <b>{lead_id}</b>: чек выдан успешно (профиль {profile_id})\n"
-        f"ID: <code>{receipt_id or '—'}</code>\nНомер: <code>{receipt_number or '—'}</code>"
+        f"✅ Сделка <b>{lead_id}</b>: чек выдан успешно ({sender_name})\n"
+        f"ID: <code>{receipt_id or '—'}</code>\nНомер: <code>{receipt_number or '—'}</code>",
+        str(profile_id),
     )
     return jsonify(
         {
