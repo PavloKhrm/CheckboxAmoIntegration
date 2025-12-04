@@ -155,7 +155,7 @@ def amocrm_webhook() -> Any:
     sender_name = resolve_sender_name(str(profile_id))
     send_telegram(
         f"✅ Сделка <b>{lead_id}</b>: чек выдан успешно ({sender_name})\n"
-        f"ID: <code>{receipt_id or '—'}</code>\nНомер: <code>{receipt_number or '—'}</code>",
+        f"ID: <code>{receipt_id or '—'}</code>",
         str(profile_id),
     )
     return jsonify(

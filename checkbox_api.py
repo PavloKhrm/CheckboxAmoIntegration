@@ -130,7 +130,7 @@ def create_sell_receipt_for_profile(
     payment_type: str = "CASHLESS",
 ) -> Any:
     profile = get_profile(profile_id)
-    email = "pasha.kharaman@gmail.com"
+
     payments_value = max(0, int(total_minor) - max(0, int(discount_minor)))
     payments = [
         {
