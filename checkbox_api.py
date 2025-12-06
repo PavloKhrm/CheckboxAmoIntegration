@@ -149,7 +149,7 @@ def create_sell_receipt_for_profile(
                 "type": "DISCOUNT",
                 "mode": "VALUE",
                 "value": int(discount_minor),
-                "name": "Знижка з AmoCRM",
+                "name": "Знижка",
             }
         ]
     if CHECKBOX_SEND_EMAIL and email:
