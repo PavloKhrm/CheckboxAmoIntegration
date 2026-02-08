@@ -44,7 +44,7 @@ def _http(
             message = str(data)
         logger.error(
             "amo.error",
-            extra={"status": resp.status_code, "message": message, "preview": str(data)[:500]},
+            extra={"status": resp.status_code, "api_message": message, "preview": str(data)[:500]},
         )
         raise AmoApiError(resp.status_code, message, data)
     return data

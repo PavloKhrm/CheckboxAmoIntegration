@@ -8,6 +8,7 @@ logger = logging.getLogger("telegram")
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_ONLY_ERRORS = os.getenv("TELEGRAM_ONLY_ERRORS", "true").lower() == "true"
 
 PROFILE_SENDER_MAP = {
     "1": NP_SENDER_NAME_1,
@@ -19,8 +20,11 @@ def resolve_sender_name(profile_id: str) -> str:
     return PROFILE_SENDER_MAP.get(profile_id, profile_id)
 
 
-def send_telegram(text: str, profile_id: str | None = None):
+def send_telegram(text: str, profile_id: str | None = None, is_error: bool = False):
     if not BOT_TOKEN or not CHAT_ID:
+        return
+    if TELEGRAM_ONLY_ERRORS and not is_error:
+        logger.debug("telegram.skip_non_error")
         return
     sender = resolve_sender_name(profile_id) if profile_id else ""
     final_text = f"<b>{sender}</b>\n{text}" if sender else text

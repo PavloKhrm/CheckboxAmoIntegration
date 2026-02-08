@@ -1,4 +1,5 @@
 import logging
+import json as jsonlib
 from typing import Any, Dict, Optional
 
 import requests
@@ -14,12 +15,54 @@ from config import (
 
 logger = logging.getLogger("checkbox_api")
 
+_SENSITIVE_KEYS = {"password", "pass", "token", "access_token", "refresh_token"}
+
 
 class CheckboxApiError(Exception):
     def __init__(self, status_code: int, message: str, payload: Any = None) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.payload = payload
+
+
+def _preview(value: Any, limit: int = 2000) -> str:
+    try:
+        rendered = jsonlib.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        rendered = str(value)
+    if len(rendered) <= limit:
+        return rendered
+    return f"{rendered[:limit]} ...<truncated {len(rendered) - limit} chars>"
+
+
+def _sanitize(value: Any) -> Any:
+    if isinstance(value, dict):
+        result: Dict[str, Any] = {}
+        for key, item in value.items():
+            key_lower = str(key).lower()
+            if key_lower in _SENSITIVE_KEYS:
+                result[str(key)] = "***"
+            else:
+                result[str(key)] = _sanitize(item)
+        return result
+    if isinstance(value, list):
+        return [_sanitize(item) for item in value]
+    return value
+
+
+def _extract_error_text(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return str(payload)
+    message = str(payload.get("message") or payload.get("error") or "").strip()
+    errors = payload.get("errors")
+    if errors:
+        details = _preview(errors, limit=1200)
+        if message:
+            return f"{message}; details={details}"
+        return f"details={details}"
+    if message:
+        return message
+    return _preview(payload, limit=1200)
 
 
 def _base_headers() -> Dict[str, str]:
@@ -45,25 +88,42 @@ def _http(
         headers["Authorization"] = f"Bearer {token}"
     if license_key:
         headers["X-License-Key"] = license_key
-    logger.debug("checkbox.http", extra={"method": method, "url": url})
+    logger.debug(
+        "checkbox.http.request",
+        extra={
+            "method": method,
+            "url": url,
+            "has_token": bool(token),
+            "request_json": _preview(_sanitize(json), limit=3000) if json is not None else "",
+        },
+    )
     resp = requests.request(method, url, headers=headers, json=json, timeout=5)
     try:
         data = resp.json()
     except Exception:
         data = resp.text
+    logger.debug(
+        "checkbox.http.response",
+        extra={
+            "method": method,
+            "url": url,
+            "status_code": resp.status_code,
+            "response_preview": _preview(data, limit=2000),
+            "request_id": resp.headers.get("X-Request-ID") or resp.headers.get("x-request-id") or "",
+        },
+    )
     if resp.status_code >= 400:
-        msg_text = ""
-        if isinstance(data, dict):
-            msg_text = str(data.get("message") or data)
-        else:
-            msg_text = str(data)
+        msg_text = _extract_error_text(data)
         logger.error(
-            "checkbox.error",
+            "checkbox.http.error",
             extra={
+                "method": method,
+                "url": url,
                 "status_code": resp.status_code,
                 "api_message": msg_text,
-                "api_preview": str(data)[:500],
-                "url": url,
+                "api_preview": _preview(data, limit=3000),
+                "request_json": _preview(_sanitize(json), limit=3000) if json is not None else "",
+                "request_id": resp.headers.get("X-Request-ID") or resp.headers.get("x-request-id") or "",
             },
         )
         raise CheckboxApiError(resp.status_code, msg_text, data)
@@ -154,5 +214,19 @@ def create_sell_receipt_for_profile(
         ]
     if CHECKBOX_SEND_EMAIL and email:
         body["delivery"] = {"emails": [email]}
+    logger.info(
+        "checkbox.receipt.payload_summary",
+        extra={
+            "profile_id": profile_id,
+            "goods_count": len(goods) if isinstance(goods, list) else 0,
+            "payments_value": payments_value,
+            "discount_minor": int(discount_minor),
+            "has_email": bool(email),
+        },
+    )
+    logger.debug(
+        "checkbox.receipt.payload_body",
+        extra={"profile_id": profile_id, "payload": _preview(body, limit=5000)},
+    )
     data = _http("POST", "/receipts/sell", token=token, json=body, license_key=profile.license_key)
     return data
